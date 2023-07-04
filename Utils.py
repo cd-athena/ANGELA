@@ -3,10 +3,13 @@
 
 import User
 from matplotlib import pyplot as plt
-import numpy as np
 import matplotlib.pyplot
 from statistics import mean
 import User
+import numpy
+from numpy import random
+from scipy import stats
+import math
 
 historical_bitrates_requested = []
 historical_radio_throughput = []
@@ -14,6 +17,7 @@ historical_predicted_throughput = []
 historical_qindex_requested = []
 historical_QoE_score = []
 historical_buffer = []
+video_popularity = []
 
 # For estimate the throughput
 req_time = []
@@ -21,13 +25,16 @@ rec_time = []
 req_size = []
 n_packets = 0
 accumulative_E2E_latency = 0  # estimate latency
+cache = []
+cacheSize = 0  # KB
+cacheLimit = 256000  # KB
 
-bitrate_ladder = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 900, 1200, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
-                  8000]
+qualityDistribution = [0, 0, 0, 0, 0, 0]  # six qualities
+bitrate_ladder_type = 0
 
 
 # For harmonic mean in SARA
-def init(nusers):
+def init(nusers, n_videos, bitrate_ladder_typ):
     global estimated_throughput
     global req_size
     global req_time
@@ -44,6 +51,10 @@ def init(nusers):
         historical_predicted_throughput.append([])
         historical_buffer.append([])
 
+    global video_popularity
+    video_popularity = random.zipf(a=2, size=n_videos)
+    global bitrate_ladder_type
+    bitrate_ladder_type = bitrate_ladder_typ
 
 def get_n_segments_requested(userId):
     return len(historical_bitrates_requested[userId])
@@ -153,9 +164,8 @@ def set_historical_e2e_throughput(userId, data_rate):
     historical_radio_throughput[userId].append(data_rate * 1000)  # Mbps to kbps
 
 
-# https://dl.acm.org/doi/pdf/10.1145/2155555.2155570
-# Segment quality: 4 = 4K; 3 = 1080p; 2 = 720p; 1 = 360p;
 def mapIndexToResolution(index):  # mapIndexToResolution
+    """
     res = ""
     if index == 19:
         res = "\"1920x1080\""
@@ -199,6 +209,22 @@ def mapIndexToResolution(index):  # mapIndexToResolution
         res = "\"320x240\""
     else:
         print("ERROR in segmentQualityIndex2resolution function, index value: " + index)
+    """
+    res = ""
+    if index == 5:
+        res = "\"3840x2160\""
+    elif index == 4:
+        res = "\"2560x1440\""
+    elif index == 3:
+        res = "\"1920x1080\""
+    elif index == 2:
+        res = "\"1280x720\""
+    elif index == 1:
+        res = "\"640x360\""
+    elif index == 0:
+        res = "\"320x180\""
+    else:
+        print("ERROR in segmentQualityIndex2resolution function, index value: " + index)
 
     return res
 
@@ -216,10 +242,6 @@ def mapIndexToSegDuration(index):
         print("ERROR in segmentLengthIndex2seconds function, index value: " + index)
 
     return duration
-
-
-def mapQualityToBitrate(q):
-    return bitrate_ladder[q]
 
 
 # This function measure the mean of the throughput list, not counting values of 0
@@ -254,27 +276,55 @@ def getSegmentSize(userId, segment_number, segment_quality, segment_duration):
     seg_duration_s = str(mapIndexToSegDuration(segment_duration))
 
     videoId = User.get_videoId(userId)  # 0 = Big Buck Bunny, 1 = Elephants Dream, 2 = Tears of Steel
-    if videoId == 0:
-        filename = "dataset/bunny_" + seg_duration_s + "s_Q" + str(segment_quality + 1) + ".txt"
-    elif videoId == 1:
-        filename = "dataset/ed_" + seg_duration_s + "s_Q" + str(segment_quality + 1) + ".txt"
-    elif videoId == 2:
-        filename = "dataset/fam_" + seg_duration_s + "s_Q" + str(segment_quality + 1) + ".txt"
+    """
+    if videoId < 3:
+        if videoId == 0:
+            filename = "dataset/bunny_" + seg_duration_s + "s_Q" + str(segment_quality + 1) + ".txt"
+        elif videoId == 1:
+            filename = "dataset/ed_" + seg_duration_s + "s_Q" + str(segment_quality + 1) + ".txt"
+        elif videoId == 2:
+            filename = "dataset/fam_" + seg_duration_s + "s_Q" + str(segment_quality + 1) + ".txt"
 
-    f = open(filename, "r")
-    lines = f.read().splitlines()
-    segment_size = lines[segment_number - 1]
+        f = open(filename, "r")
+        lines = f.read().splitlines()
+        segment_size = lines[segment_number - 1]
 
-    if segment_size[-1] == 'K':
-        segment_size = segment_size[:-1]
-        segment_size = float(segment_size)
-        segment_size = int(segment_size)
-    elif segment_size[-1] == 'M':
-        segment_size = segment_size[:-1]
-        segment_size = float(segment_size)
-        segment_size = int(segment_size * 1024)
+        if segment_size[-1] == 'K':
+            segment_size = segment_size[:-1]
+            segment_size = float(segment_size)
+            segment_size = int(segment_size)
+        elif segment_size[-1] == 'M':
+            segment_size = segment_size[:-1]
+            segment_size = float(segment_size)
+            segment_size = int(segment_size * 1024)
 
-    f.close()
+        f.close()
+
+    """
+
+    if bitrate_ladder_type == 1:
+        if segment_quality == 0:
+            segment_size = 1150
+        elif segment_quality == 1:
+            segment_size = 2150
+        elif segment_quality == 2:
+            segment_size = 3500
+        elif segment_quality == 3:
+            segment_size = 8500
+    else:
+        # Dataset with 6 qualities, 4 seconds, fixed size over segments
+        if segment_quality == 0:
+            segment_size = 100
+        elif segment_quality == 1:
+            segment_size = 375
+        elif segment_quality == 2:
+            segment_size = 1150
+        elif segment_quality == 3:
+            segment_size = 2150
+        elif segment_quality == 4:
+            segment_size = 3500
+        elif segment_quality == 5:
+            segment_size = 8500
 
     return segment_size  # in KB
 
@@ -396,6 +446,7 @@ def stats(n_users):
     # Mean bitrate
     mean_bitrate = 0
     mean_bitrate_P = 0
+    mean_quality = 0.0
     p_users = 0
     mean_bitrate_NP = 0
     np_users = 0
@@ -403,6 +454,7 @@ def stats(n_users):
         print("radio throughput user " + str(uid))
         print(historical_radio_throughput[uid])
         mean_bitrate = mean_bitrate + mean(historical_bitrates_requested[uid])
+        mean_quality = mean_quality + mean(historical_qindex_requested[uid])
         if uid % 2 == 0:
             mean_bitrate_P += mean(historical_bitrates_requested[uid])
             p_users += 1
@@ -411,12 +463,14 @@ def stats(n_users):
             np_users += 1
 
     mean_bitrate = mean_bitrate / n_users
+    mean_quality = float(mean_quality / n_users)
     mean_bitrate_P = mean_bitrate_P / p_users
     #  mean_bitrate_NP = mean_bitrate_NP / np_users
     print("--------------------")
     print("Mean bitrate (kbps): " + str(int(mean_bitrate)))
-    print("Mean bitrate premium (kbps): " + str(int(mean_bitrate_P)))
-    print("Mean bitrate non-premium (kbps): " + str(int(mean_bitrate_NP)))
+    print("Mean quality: " + str(mean_quality))
+    #print("Mean bitrate premium (kbps): " + str(int(mean_bitrate_P)))
+    #print("Mean bitrate non-premium (kbps): " + str(int(mean_bitrate_NP)))
 
     n_stalls = 0
     mean_stall_duration = 0
@@ -427,7 +481,8 @@ def stats(n_users):
     mean_radio_thr = 0
     n_switches_magnitude_kbps = 0
     for uid in range(n_users):
-        # print("user " + str(uid) + " has this number of stalls: " + str(user.get_n_stalls(uid)))
+        #print("user " + str(uid) + " has this number of stalls: " + str(User.get_n_stalls(uid)))
+        #print("user " + str(uid) + " has this mean bitrate: " + str(mean(historical_bitrates_requested[uid])))
         n_stalls += User.get_n_stalls(uid)
         mean_stall_duration += User.get_rebuffering_acumulated(uid)
         n_possible_switches += len(historical_qindex_requested[uid]) - 1
@@ -448,13 +503,17 @@ def stats(n_users):
 
     # print("Switches (% of total) " + str((n_switches * 100 / n_possible_switches)))
     # print("nº switches: " + str(n_switches) + " nº requests: " + str(n_possible_switches))
-    print("Mean switching magnitude (kbps) " + str(int((n_switches_magnitude_kbps / n_switches))))
-    print("Mean switching magnitude (qualities) " + str(float((n_switches_magnitude_qualities / n_switches))))
+    if n_switches == 0:
+        print("Mean switching magnitude (kbps) " + str(int(0)))
+        print("Mean switching magnitude (qualities) " + str(float(0)))
+    else:
+        print("Mean switching magnitude (kbps) " + str(int((n_switches_magnitude_kbps / n_switches))))
+        print("Mean switching magnitude (qualities) " + str(float((n_switches_magnitude_qualities / n_switches))))
     print("Number of stallings: " + str(n_stalls))
     if n_stalls > 0:
         print("Mean stalling duration (ms): " + str(int((mean_stall_duration / n_stalls))))
 
-    print("Mean latency is " + str(int(accumulative_E2E_latency / n_packets)))
+    #print("Mean latency is " + str(int(accumulative_E2E_latency / n_packets)))
 
 
 def ECAS_stats(n_users):
@@ -546,7 +605,7 @@ def parseQoE(nusers):
             if overall_QoE in words:
                 st = words[1]
                 st = st[:-1]
-                print(st)
+                #print(st)
                 # print("QoE of user " + str(x) + " is: " + str(st))
                 qoe[x] = float(st)
                 sum = sum + float(st)
@@ -622,3 +681,271 @@ def writeDataset(nusers):
             f.write("\n")
 
     f.close()
+
+
+def writeMLdata(nusers):
+    n_users = nusers
+    filename = "BBA_ML.csv"
+    f = open(filename, "a")
+    f.write("Buffer, Bandwidth, PreviousQuality, PreviousBandwidth, Quality")
+    f.write("\n")
+    for userId in range(n_users):
+        for s in range(get_n_segments_requested(userId)):
+            buffer = int(historical_buffer[userId][s] * 1000)
+            bandwidth = historical_predicted_throughput[userId][s]
+            if s == 0:
+                previous_q = 0
+                previos_bw = 0
+            else:
+                previous_q = historical_qindex_requested[userId][s - 1]
+                previos_bw = historical_predicted_throughput[userId][s - 1]
+            q = historical_qindex_requested[userId][s]
+
+            #print(str(buffer) + "," + str(bandwidth) + "," + str(previous_q) + "," + str(previos_bw) + "," + str(q))
+            f.write(str(buffer) + "," + str(bandwidth) + "," + str(previous_q+1) + "," + str(previos_bw) + "," + str(q+1))
+            f.write("\n")
+
+    f.close()
+
+
+# historical_buffer[userId][n_seg]
+# historical_predicted_throughput[userId][n_seg] # Download bandwidth (Mbps),
+
+
+#############
+## CACHING ##
+#############
+
+
+def createCache(n_users, n_videos, n_segments, n_qualities):
+    global cache
+    n_features = 4
+    #cache = numpy.zeros((n_videos, n_segments, n_qualities, n_features))
+    cache = numpy.zeros((n_videos, n_segments+n_users, n_qualities, n_features)) # Desynchronization
+
+
+def isCached(videoId, segmentId, qualityId):
+    return cache[videoId][segmentId][qualityId][0] != 0
+
+
+def addToCache(userId, videoId, segmentId, qualityId, size, cachingPolicy):
+    global cache, cacheSize, cacheLimit
+    wasCached = True
+
+    segmentId = segmentId + userId # Desynchronization
+
+    if size < cacheLimit:
+        # If not already cached
+        if cache[videoId][segmentId][qualityId][0] == 0:
+            wasCached = False
+            # if there is space, is cached
+            if cacheSize + size < cacheLimit:
+                cache[videoId][segmentId][qualityId][0] = size
+                cache[videoId][segmentId][qualityId][1] = 0
+                cache[videoId][segmentId][qualityId][2] = 0
+                cache[videoId][segmentId][qualityId][3] = getVideoPopularity(videoId) * getQualityPopularity(qualityId)
+
+                cacheSize += size
+            # if there is no space, we do a sustitution
+            else:
+                if cachingPolicy == "LRU":
+                    cacheSustitution(1, size, videoId, segmentId, qualityId)
+                elif cachingPolicy == "LFU":
+                    cacheSustitution(2, size, videoId, segmentId, qualityId)
+                elif cachingPolicy == "LPU":
+                    cacheSustitution(3, size, videoId, segmentId, qualityId)
+        else:
+            # already cached
+            cache[videoId][segmentId][qualityId][1] = 0
+            cache[videoId][segmentId][qualityId][2] += 1
+
+        updateCache()
+
+    else:
+        # If the size of the segment is larger than the cache limit, it cannot be cached
+        wasCached = False
+
+    return wasCached
+
+def updateCache():
+    # Update features
+    for i in range(len(cache)):
+        for j in range(len(cache[i])):
+            for k in range(len(cache[i][j])):
+                if isCached(i, j, k):
+                    cache[i][j][k][1] -= 1
+
+
+def cacheFindLowestValue(featureId):
+    if featureId == 1:
+        lowest_value = 0
+    elif featureId == 2:
+        lowest_value = 99999
+    elif featureId == 3:
+        lowest_value = 1
+
+    lowest_value_videoId = -1
+    lowest_value_segmentId = -1
+    lowest_value_qualityId = -1
+
+    for i in range(len(cache)):
+        for j in range(len(cache[i])):
+            for k in range(len(cache[i][j])):
+                if isCached(i, j, k):
+                    if cache[i][j][k][featureId] < lowest_value:
+                        lowest_value = cache[i][j][k][featureId]
+                        lowest_value_videoId = i
+                        lowest_value_segmentId = j
+                        lowest_value_qualityId = k
+
+    return lowest_value_videoId, lowest_value_segmentId, lowest_value_qualityId
+
+
+def cacheSustitution(featureId, size, videoId, segmentId, qualityId):
+    global cacheSize
+
+    while cacheSize + size > cacheLimit:
+        # free space
+        old_videoId, old_segmentId, old_qualityId = cacheFindLowestValue(featureId)
+        cacheSize = cacheSize - cache[old_videoId][old_segmentId][old_qualityId][0]
+        cache[old_videoId][old_segmentId][old_qualityId][0] = 0
+        cache[old_videoId][old_segmentId][old_qualityId][1] = 0
+        cache[old_videoId][old_segmentId][old_qualityId][2] = 0
+        cache[old_videoId][old_segmentId][old_qualityId][3] = 0
+
+    # update
+    cache[videoId][segmentId][qualityId][0] = size
+    cacheSize += size
+    cache[videoId][segmentId][qualityId][1] = 0
+    cache[videoId][segmentId][qualityId][2] = 0
+    cache[videoId][segmentId][qualityId][3] = getVideoPopularity(videoId) * getQualityPopularity(qualityId)
+    #print("Video popularity: " + str(getVideoPopularity(videoId)) + " Quality popularity: " + str(getQualityPopularity(qualityId)) + " LPU score: " + str(getVideoPopularity(videoId) * getQualityPopularity(qualityId)))
+
+
+def visualizeCache():
+    print(cache)
+
+
+def getCacheSize():
+    return cacheSize
+
+
+######################
+## VIDEO POPULARITY ##
+######################
+
+# Return normalized video popularity (0,1)
+def getVideoPopularity(videoId):
+
+    global video_popularity
+    total = sum(video_popularity)
+    if total == 0:
+        popularity = 0
+    else:
+        popularity = video_popularity[videoId] / total
+
+    return popularity
+
+
+def getRandomVideoId(n_videos):
+    r = random.uniform(0, 1)
+    s = 0
+    videoId = 0
+
+    while r > (s + getVideoPopularity(videoId)):
+        videoId += 1
+        if videoId < n_videos-1:
+            s = s + getVideoPopularity(videoId)
+        else:
+            r = 999  # out of while
+
+    #print("Video Id: " + str(videoId))
+    return videoId
+
+# Return normalized quality popularity (0,1)
+def getQualityPopularity(qualityId):
+    total = sum(qualityDistribution)
+    if total == 0:
+        popularity = 0
+    else:
+        popularity = qualityDistribution[qualityId] / total
+
+    return popularity
+
+
+def updateQualityPopularity(qualityId):
+    qualityDistribution[qualityId] += 1
+
+
+
+def showVideoPopularity(n_users):
+    for x in range(n_users):
+        videoId = User.get_videoId(x)
+        print("User " + str(x) + " watch video id " + str(videoId))
+
+
+# Transrating time in ms
+def getTransratingTime(bitrate_ladder_type, init_Q, final_Q):
+    # Bitrate ladder types:
+    # (0) 200, 750, 2300, 4300
+    # (1) 2300, 4300, 7000, 17000
+    # (2) 200, 750, 2300, 4300, 7000, 17000
+
+    wait_ms = 0
+
+    if bitrate_ladder_type == 1:
+        init_Q = init_Q + 2
+
+    if init_Q == 1:
+        if final_Q == 0:
+            wait_ms = 286
+    if init_Q == 2:
+        if final_Q == 0:
+            wait_ms = 538
+        elif final_Q == 1:
+            wait_ms = 852
+    if init_Q == 3:
+        if final_Q == 0:
+            wait_ms = 735
+        elif final_Q == 1:
+            wait_ms = 1060
+        elif final_Q == 2:
+            wait_ms = 1993
+    if init_Q == 4:
+        if final_Q == 0:
+            wait_ms = 914
+        elif final_Q == 1:
+            wait_ms = 1202
+        elif final_Q == 2:
+            wait_ms = 2124
+        elif final_Q == 3:
+            wait_ms = 3856
+    if init_Q == 5:
+        if final_Q == 0:
+            wait_ms = 1731
+        elif final_Q == 1:
+            wait_ms = 2008
+        elif final_Q == 2:
+            wait_ms = 3081
+        elif final_Q == 3:
+            wait_ms = 4519
+        elif final_Q == 4:
+            wait_ms = 6819
+
+    wait_ms = wait_ms / 100
+    return wait_ms
+
+
+def getSuperresolutionTime(quality):
+    #quality from 0 to 5, but bitrate ladder is reduced to 1 to 4
+    computing_time = 0
+    if quality == 2:
+        computing_time = 1778
+    elif quality == 3:
+        computing_time = 2747
+    elif quality == 4:
+        computing_time = 4437
+    elif quality == 5:
+        computing_time = 4437
+    computing_time = computing_time/8
+    return computing_time
