@@ -298,11 +298,23 @@ def parse_Dataset_Traces(userId, mobilityPattern):
 
 def parse_Dataset_Automatic(userId):
 
+    # We select 5 radio profiles
+    n = userId%5
+    if n == 0:
+        radiofile_number = 10
+    elif n == 1:
+        radiofile_number = 26
+    elif n == 2:
+        radiofile_number = 81
+    elif n == 3:
+        radiofile_number = 100
+    elif n == 4:
+        radiofile_number = 119 # 116
+
     # We might overwrite here to test with 135 users each one with different radio file
-    radiofile_number = int(userId+1)
+    #radiofile_number = int(userId+1)
 
     User.set_tracenumber(userId, radiofile_number)
-
     if radiofile_number < 10:
         payload = "00"
     elif radiofile_number < 100:
@@ -350,23 +362,26 @@ def throughputGivenTime(userId, time):
 
     index = 0
     throughput = int(radio_throughput[userId][index])
-
     lower_bound = 0  # of time
     higher_bound = int(radio_time[userId][index])
-
     max_index = len(radio_time[userId]) - 1
 
-    if time > int(radio_time[userId][max_index]):
-        print("-------------------------------------------------------------------------------")
-        print("ERROR: throughputGivenTime - you request a time higher than the radio data time")
-        print("Time requested: " + str(time))
-        print("Values only between " + str(radio_time[userId][0]) + " and " + str(radio_time[userId][max_index]))
-        print("-------------------------------------------------------------------------------")
+
+    if time >= int(radio_time[userId][max_index]):
+        #print("-------------------------------------------------------------------------------")
+        print("Warning: throughputGivenTime - you request a time higher than the radio data time")
+        print("User and trace id: " + str(userId))
+        #print("Time requested: " + str(time))
+        #print("Values only between " + str(radio_time[userId][0]) + " and " + str(radio_time[userId][max_index]))
+        #print("-------------------------------------------------------------------------------")
     else:
         while not ((time < higher_bound) and (time >= lower_bound)):
             index = index + 1
             lower_bound = higher_bound
-            higher_bound = int(radio_time[userId][index])
+            if index <= max_index:
+                higher_bound = int(radio_time[userId][index])
+            else:
+                index = max_index -1 # we should fix this
 
     throughput = float(radio_throughput[userId][index])
 

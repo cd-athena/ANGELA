@@ -5,6 +5,9 @@ import Radio
 import User
 import EdgeAssisted
 import sys
+import numpy
+
+from numpy import random
 
 """
 Units: 
@@ -21,14 +24,26 @@ class Server:
 
     def sendSegment2Edge(self, time, userId):
         segment_number = User.get_segment_number(userId)
-        segment_quality = User.get_segment_quality(userId)
         segment_duration = User.get_segment_duration(userId)
+        segment_quality = User.get_segment_quality(userId)
+
+        #Utils.updateQualityPopularity(segment_quality) # For LPU cache
 
         # We get the segment size from the dataset
         seg_size_KB = Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
         seg_size_megabits = float(seg_size_KB) * 0.008
 
         Utils.set_req_size(userId, seg_size_megabits)
+
+        prefetching_policy = User.get_prefetching_policy(userId)
+        if prefetching_policy == 4:
+            # Transrating, we requested the highest
+            seg_size_KB = Utils.getSegmentSize(userId, segment_number, n_qualities - 1, segment_duration)
+            seg_size_megabits = float(seg_size_KB) * 0.008
+        elif prefetching_policy == 7:
+            # superresolution, we requested the 2nd lowest
+            seg_size_KB = Utils.getSegmentSize(userId, segment_number, 1, segment_duration)
+            seg_size_megabits = float(seg_size_KB) * 0.008
 
         tx_time_sec = seg_size_megabits / self.BW_Server_Edge  # seconds
         end_time = time + tx_time_sec * 1000  # ms
@@ -49,52 +64,149 @@ class Edge:
         segment_quality = User.get_segment_quality(userId)
         segment_duration = User.get_segment_duration(userId)
 
+        seg_size_KB = Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
+
         time = time_s
         last_q = Utils.get_last_historical_qindex(userId)
 
-        # Prefetching
-        global prefetched_hits
-        global KB_stored
-        last_q = Utils.get_last_historical_qindex(userId)
-        prefetching_policy = User.get_prefetching_policy(userId)
-        if segment_number >= 2:
-            if prefetching_policy == 0:
-                #  No prefetching
-                KB_stored += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
-            elif prefetching_policy == 1:
-                # Prefetch all
-                for x in range(n_qualities):
-                    KB_stored += Utils.getSegmentSize(userId, segment_number, x, segment_duration)
+        # Caching and prefetching
+        # First, we check if the segment was cached
+        global possible_hits
+        possible_hits += 1
 
-                time = prefetch_time[userId]
-                prefetched_hits += 1
-                wasPrefetched[userId] = True
-            elif prefetching_policy == 2:
-                # Prefetch same
-                KB_stored += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
-                if last_q != segment_quality:
-                    KB_stored += Utils.getSegmentSize(userId, segment_number, last_q, segment_duration)
-                else:
-                    time = prefetch_time[userId]
-                    prefetched_hits += 1
-                    wasPrefetched[userId] = True
-
-            elif prefetching_policy == 3:
-                # Prefetch same, +1, -1
-                KB_stored += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
-                if last_q != segment_quality:
-                    KB_stored += Utils.getSegmentSize(userId, segment_number, last_q, segment_duration)
-                if last_q + 1 != segment_quality and last_q + 1 < 20:
-                    KB_stored += Utils.getSegmentSize(userId, segment_number, last_q + 1, segment_duration)
-                if last_q - 1 != segment_quality and last_q - 1 >= 0:
-                    KB_stored += Utils.getSegmentSize(userId, segment_number, last_q - 1, segment_duration)
-                if segment_quality == last_q or segment_quality == last_q + 1 or segment_quality == last_q - 1:
-                    time = prefetch_time[userId]
-                    prefetched_hits += 1
-                    wasPrefetched[userId] = True
+        cachingProb = 10
+        ranCaching = random.uniform(0, 100)
+        if ranCaching > cachingProb:
+            wasCached = False
         else:
-            KB_stored += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
-            wasPrefetched[userId] = False
+            wasCached = True
+        #wasCached = Utils.addToCache(userId, User.get_videoId(userId), segment_number, segment_quality, seg_size_KB, cachingPolicy)
+        wasCached = False  # Deactivate caching
+        if wasCached:
+            # it was cached
+            time = prefetch_time[userId]
+            wasPrefetched[userId] = True  # was served from the edge
+            # Caching stats
+            global caching_hits
+            caching_hits += 1
+        else:
+            # If it is not cached, we check if the segment was prefetched
+            global prefetched_hits
+            global backhaul_data_sent_KB
+            global needed_data_sent_KB
+            last_q = Utils.get_last_historical_qindex(userId)
+            prefetching_policy = User.get_prefetching_policy(userId)
+            needed_data_sent_KB += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
+            if segment_number >= 2:
+                if prefetching_policy == 0:
+                    #  No prefetching
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
+                elif prefetching_policy == 1:
+                    # Prefetch all
+                    for x in range(n_qualities):
+                        backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, x, segment_duration)
+
+                    time = prefetch_time[userId]
+                    prefetched_hits += 1
+                    wasPrefetched[userId] = True
+                elif prefetching_policy == 2:
+                    # Prefetch same
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
+                    if last_q != segment_quality:
+                        backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q, segment_duration)
+                    else:
+                        time = prefetch_time[userId]
+                        prefetched_hits += 1
+                        wasPrefetched[userId] = True
+
+                elif prefetching_policy == 3:
+                    # Prefetch same, +1, -1
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
+                    if last_q != segment_quality:
+                        backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q, segment_duration)
+                    if last_q + 1 != segment_quality and last_q + 1 < 20:
+                        backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q + 1, segment_duration)
+                    if last_q - 1 != segment_quality and last_q - 1 >= 0:
+                        backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q - 1, segment_duration)
+                    if segment_quality == last_q or segment_quality == last_q + 1 or segment_quality == last_q - 1:
+                        time = prefetch_time[userId]
+                        prefetched_hits += 1
+                        wasPrefetched[userId] = True
+                elif prefetching_policy == 4:
+                    # Transrating, we sent the highest quality
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, n_qualities - 1, segment_duration)
+                    # And then we do the transrating process
+                    global bitrate_ladder_type # this should be in other place, move it.
+                    transrating_time = Utils.getTransratingTime(bitrate_ladder_type,n_qualities - 1,segment_quality)
+                    # 100% hit rate as we transrate to the desired quality requested by the user
+                    transrating_time = transrating_time / 2
+                    time = prefetch_time[userId] + transrating_time
+                    wasPrefetched[userId] = True
+                    prefetched_hits += 1
+
+                elif prefetching_policy == 5:
+                    # Markov
+                    # Less than 10 requests for that quality = no reliable, we follow ABR, no prefetching
+                    # More than 10 requests for that quality – we follow Markov tree, prefetching the quality with most probability to be requested
+
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q, segment_duration)
+
+                    sum_markov = 0
+                    highest = -1
+                    highest_q = 0 # We want the quality to prefetch that was requested the most
+                    for x in range(n_qualities):
+                        r = last_q
+                        n_r = User.get_markov(userId,r,x)
+                        sum_markov = sum_markov + n_r
+                        if n_r > highest:
+                            highest = n_r
+                            highest_q = x
+
+                    if sum_markov >= 10:
+                        predicted = highest_q
+                        if predicted != segment_quality:
+                            backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q,
+                                                                          segment_duration)
+                        else:
+                            time = prefetch_time[userId]
+                            prefetched_hits += 1
+                            wasPrefetched[userId] = True
+
+                elif prefetching_policy == 6:
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q,
+                                                                  segment_duration)
+                    # Machine learning
+                    if ABR_Algorithm == "TBA" or ABR_Algorithm == "BBA":
+                        hit = True
+                    else:
+                        accuracy = 92.5
+                        ran = random.uniform(0, 100)
+                        if ran > accuracy:
+                            hit = False
+                        else:
+                            hit = True
+                    if hit:
+                        # was successfully prefetched
+                        ML_time = 100  # ms
+                        time = prefetch_time[userId] + ML_time
+                        wasPrefetched[userId] = True
+                        prefetched_hits += 1
+                    else:
+                        # Note: we use last_q as predicted quality as simplification
+                        backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, last_q,
+                                                                  segment_duration)
+                elif prefetching_policy == 7:
+                    # super resolution, ONLY with bitrate ladder C
+                    backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, 1,
+                                                                  segment_duration)
+                    # And then we do the transrating process
+                    computing_time = Utils.getSuperresolutionTime(segment_quality)
+                    time = prefetch_time[userId] + computing_time
+                    wasPrefetched[userId] = True
+                    prefetched_hits += 1
+            else:
+                backhaul_data_sent_KB += Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
+                wasPrefetched[userId] = False
 
         seg_size_KB = Utils.getSegmentSize(userId, segment_number, segment_quality, segment_duration)
         RAN_tx_time = Radio.calculateTxTimeRAN(userId, time, seg_size_KB)
@@ -128,6 +240,14 @@ class Edge:
 
     def sendRequest2Server(self, time, userId):
         prefetch_time[userId] = time
+
+        # Superresolution
+        if User.get_prefetching_policy(userId) == 7:
+            segment_quality = User.get_segment_quality(userId)
+            if segment_quality == 0:
+                User.set_segment_quality(userId, 1)
+            elif segment_quality == 5:
+                User.set_segment_quality(userId, 4)
 
         segment_number = User.get_segment_number(userId)
         segment_quality = User.get_segment_quality(userId)
@@ -195,6 +315,7 @@ class Client:
         if buffer_in_sec + segment_duration_in_sec > max_buffer:
             # player wait until it has space
             time = time + (buffer_in_sec + segment_duration_in_sec - max_buffer) * 1000
+            User.set_buffer(userId, (max_buffer-segment_duration_in_sec)*1000)
 
         Utils.set_req_time(userId, time)
 
@@ -234,9 +355,15 @@ class Client:
         elif ABR_Algorithm == "TBA":
             next_segment_quality = ABR.TBA(userId, n_qualities, est_throughput)
 
+        # Markov
+        r = User.get_segment_quality(userId)
+        c = next_segment_quality
+        User.add_markov(userId,r,c)
+
         User.set_segment_quality(userId, next_segment_quality)
         User.set_time_last_request(userId, time)
         # end ABR algorithm
+
 
         if trace_mode == 1:
             print("------------------------------------------")
@@ -283,6 +410,7 @@ class Client:
                 if buffer_value < 0:
                     # Stall occur
                     print("Stalling event, n request: " + str(segment_number))
+                    print("User and trace id: " + str(userId))
                     stall_duration = -buffer_value
 
                     User.add_rebuffering_acumulated(userId, stall_duration)
@@ -360,24 +488,34 @@ class Client:
 
 #####################################################################################
 
-BW_Server_Edge = 1000  # Mbps
-latency_Server_Edge = 50  # one-way (ms)
+BW_Server_Edge = 100  # Mbps
+latency_Server_Edge = 200  # one-way (ms)
 
 request_size = 2  # KB
-n_qualities = 20
-n_users = 1
+bitrate_ladder_type = 2  # 0 low 1 high 2 all 3 twenty qualities
+if bitrate_ladder_type == 2:
+    n_qualities = 6
+elif bitrate_ladder_type == 0:
+    n_qualities = 4
+elif bitrate_ladder_type == 1:
+    n_qualities = 4
+else:
+    n_qualities = 20
+
+n_users = 100
+n_videos = n_users
 initial_segment = 1
 initial_quality = 1
 initial_segment_duration = 1  # Segment duration: 3 = 10 sec; 2 = 6 sec; 1 = 2 sec;
 User.set_n_users(n_users)
-User.create_list(n_users, initial_quality, initial_segment_duration)
+User.init(n_users, initial_quality, initial_segment_duration, n_qualities)
 initial_segment_size = Utils.getSegmentSize(0, initial_segment, initial_quality, initial_segment_duration)
 max_buffer = 30  # Maximum buffer size in seconds
 
 # Parameters of simulation
 P1203_Evaluation.init(n_users)
 ABR.init(n_users)
-Utils.init(n_users)
+Utils.init(n_users, n_videos, bitrate_ladder_type)
 
 automatic_run = False  # Run multiple simulations from script. Arguments are needed.
 select_file = True  # Select directly the radio traces (True) or use a mobility pattern (False)
@@ -410,20 +548,19 @@ ABR_Algorithm = "SARA"  # BBA, TBA, SARA,
 trace_mode = 2  # 0 all, 1 only when segment received, 2 no traces
 clustering_policy = ""  # "Par" "Video" or "Thr"
 clusters = 1  # number of clusters
-premium_users = ""  # All/Par Who is premium user and enjoy prefetching?
+premium_users = "All"  # All/Par Who is premium user and enjoy prefetching?
 
-#  Prefetching policy:  0 no prefetching (default), 1 prefetching all, 2 prefetching the same, 3 prefetching same +1 and -1
-if mode != 'Classic':
-    for userId in range(n_users):
-        if premium_users == "Par":
-            if userId + 1 % 2 == 0:
-                User.set_prefetching_policy(userId, 3)
-                User.set_subscription(userId, 1)
-                # Only premium users has segment prefetching
-                # Par users (0, 2, 4, 6...) are premium
-        elif premium_users == "All":
-            User.set_prefetching_policy(userId, 3)
+#  Prefetching policy:  0 no prefetching (default), 1 prefetching all, 2 prefetching the same, 3 prefetching same +1 and -1, 4 transrating, 5 markov, 6 ml, 7 SuperResolution
+for userId in range(n_users):
+    if premium_users == "Par":
+        if userId + 1 % 2 == 0:
+            User.set_prefetching_policy(userId, 0)
             User.set_subscription(userId, 1)
+            # Only premium users has segment prefetching
+            # Par users (0, 2, 4, 6...) are premium
+    elif premium_users == "All":
+        User.set_prefetching_policy(userId, 6)
+        User.set_subscription(userId, 1)
 
 # ECAS-ML parameters
 if automatic_run:
@@ -452,13 +589,24 @@ elif clustering_policy == "Par":
             User.set_clusterId(userId, 1)
 
 for userId in range(n_users):
-    User.set_videoId(userId, userId % 3)  # 0 = Big Buck Bunny, 1 = Elephants Dream, 2 = Tears of Steel
+    videoId = Utils.getRandomVideoId(n_videos)
+    User.set_videoId(userId, videoId)  # 0 = Big Buck Bunny, 1 = Elephants Dream, 2 = Tears of Steel, 3 = fixed dataset
     resolutions = ["426x240", "640x360", "850x480", "1280x720"]  # 1920x1080, 3840x2160
     screen_resolution = resolutions[userId % 4]
+    screen_resolution = "1920x1080"  # fixed in 4K 2048x1080 "3840x2160"
     User.set_screen_resolution(userId, screen_resolution)
 
-KB_stored = 0
+Utils.showVideoPopularity(n_users)
+backhaul_data_sent_KB = 0
+needed_data_sent_KB = 0
 prefetched_hits = 0
+caching_hits = 0
+possible_hits = 0
+
+## Cache
+n_seg = 250
+Utils.createCache(n_users, n_videos, n_seg, n_qualities)
+cachingPolicy = "LFU"
 
 # Start
 print("---------------------------------------")
@@ -519,9 +667,18 @@ for x in range(n_users):
 # Utils.plotGraph(0)
 Utils.CalculateFairness(n_users, clustering_policy)
 Utils.stats(n_users)
-print("Stored data in KB: " + str(KB_stored))
-print("Prefetched hits: " + str(prefetched_hits * 100 / (n_segments - 1)))
+#print("Stored data in KB: " + str(backhaul_data_sent_KB))
+#print("Needed data in KB: " + str(needed_data_sent_KB))
+#print("Wasted data in KB: " + str(backhaul_data_sent_KB - needed_data_sent_KB))
+
+possible_hits -= 1
+#print("Prefetched hits: " + str(prefetched_hits))
+#print("Caching hits: " + str(caching_hits))
+print("Wasted data in KB (%): " + str((backhaul_data_sent_KB-needed_data_sent_KB)*100/(backhaul_data_sent_KB) ))
+print("Prefetched hits (%): " + str(prefetched_hits*100/possible_hits))
+print("Caching hits (%): " + str(caching_hits*100/possible_hits))
 qoe = Utils.parseQoE(n_users)
 Utils.write_data(ss_penalty, stalls_penalty, threshold1, threshold2, qoe, writefile)
 # Utils.ECAS_stats(n_users)
-Utils.writeDataset(n_users)
+#Utils.writeDataset(n_users)
+#Utils.writeMLdata(n_users)

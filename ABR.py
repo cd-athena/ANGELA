@@ -129,9 +129,9 @@ def buffer_to_rate(current_buffer, rmax, rmin, r, c):
 
 # "A Buffer-Based Approach to Rate Adaptation: Evidence from a Large Video Streaming Service"
 def BBA(current_quality_index, current_buffer, n_qualities):
-    buffer_size = 240  # seconds
-    reservoir = 90  # seconds
-    cushion = 126  # seconds
+    buffer_size = 30  # seconds
+    reservoir = 10  # seconds
+    cushion = 20  # seconds
 
     rate_prev = current_quality_index
     Rmax = n_qualities - 1  # index

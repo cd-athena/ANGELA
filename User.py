@@ -1,8 +1,10 @@
+import numpy
+
 user = []
 n_users = 0
 
 
-def create_list(n_users, initial_quality, initial_segment_duration):
+def init(n_users, initial_quality, initial_segment_duration, n_qualities):
     segment_number = 0
     segment_quality = initial_quality
     segment_duration = initial_segment_duration
@@ -23,11 +25,12 @@ def create_list(n_users, initial_quality, initial_segment_duration):
     screen_resolution = ""
     last_segment_thoughput = 0
     tracenumber = 0
+    markov = numpy.zeros(shape=(n_qualities, n_qualities))
 
     for x in range(n_users):
         user.append([segment_number, segment_quality, segment_duration, latency, bitrate, time_last_request, buffer,
                      buffer_target, buffer_filling_phase, clusterId, videoId, rebuffering_accumulated, startup_delay,
-                     n_stalls, bitrate_changes, subscription, prefetching_policy, screen_resolution, last_segment_thoughput, tracenumber])
+                     n_stalls, bitrate_changes, subscription, prefetching_policy, screen_resolution, last_segment_thoughput, tracenumber, markov])
 
 
 def get_n_users():
@@ -195,3 +198,11 @@ def get_tracenumber(userId):
 
 def set_tracenumber(userId, value):
     user[userId][19] = value
+
+
+def get_markov(userId, r, c):
+    return user[userId][20][r][c]
+
+
+def add_markov(userId, r, c):
+    user[userId][20][r][c] += 1

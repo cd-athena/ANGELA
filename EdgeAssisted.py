@@ -89,7 +89,7 @@ def EADAS(time, userId, n_qualities, ABR_quality_index, segment_size_ladder):
         total_throughput = Radio.throughputGivenTime(userId, time)
 
         # First test: avoid stallings
-        estimated_download = (segment_size_ladder[x] * 8 / 1000) / radio_throughput
+        estimated_download = (segment_size_ladder[x] * 8 / 1000) / total_throughput
         current_buffer = User.get_buffer(userId)
         # If we don't go under safe buffer value
         if (current_buffer - estimated_download * 1000) > (User.get_buffer_target(userId) / 2):
@@ -205,9 +205,9 @@ def ECAS(userId, time, n_qualities, CN_BW, CN_latency):
 
         # Delivery time calculation
         # this could be easily done with estimated throughput, but you want to use the future throughput prediction
-        tx_time_request_CE = Radio.calculateTxTimeRAN(userId, time, 1*8, CN_latency, CN_BW)  # Assuming 1 KB request
+        tx_time_request_CE = Radio.calculateTxTimeRAN(userId, time, 1*8)  # Assuming 1 KB request
         tx_time_request_ES = 1 * 8 / CN_BW  # Assuming 1 KB request
-        tx_time_segment_CE = Radio.calculateTxTimeRAN(userId, time, seg_size * 8, CN_latency, CN_BW)
+        tx_time_segment_CE = Radio.calculateTxTimeRAN(userId, time, seg_size * 8)
         tx_time_segment_ES = seg_size * 8 / CN_BW
 
         # If the quality is gonna be prefetched, the delivery time is lower
